@@ -145,7 +145,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     <div class="row start"><button class="btn" id="asrPick"><span data-en="Pilih file rekaman">Pilih file rekaman</span></button><span class="hint" id="asrName" style="align-self:center"></span></div>
     <div class="opts" style="justify-content:flex-start">
       <label for="asrModel"><span data-en="Mode">Mode</span>
-        <select id="asrModel"><option value="fast" data-en="Fast (lighter)">Cepat (lebih ringan)</option><option value="accurate" data-en="Accurate (heavier)">Akurat (lebih berat)</option></select></label>
+        <select id="asrModel"><option value="light" data-en="Light (safest on iPhone, ~40 MB)">Ringan (paling aman di iPhone, ±40 MB)</option><option value="fast" data-en="Fast (~80 MB)">Cepat (±80 MB)</option><option value="accurate" data-en="Accurate (~250 MB, laptop)">Akurat (±250 MB, untuk laptop)</option></select></label>
       <span data-en="Language follows Bahasa rapat above.">Bahasa mengikuti pilihan Bahasa rapat di atas.</span>
     </div>
     <div class="rangebox" id="asrRange" hidden>
@@ -207,8 +207,10 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // ---------- version ----------
   // Bump APP_VERSION (x.y.z) and add an entry on top for every change.
   // x Major = big change, y Minor = new feature, z Patch = fix or small tweak.
-  const APP_VERSION = "1.4.0";
+  const APP_VERSION = "1.4.1";
   const CHANGELOG = [
+    { v: "1.4.1", d: "2026-11-09", items: ["Perbaikan: aplikasi tertutup sendiri di iPhone saat menyiapkan model. Di iPhone model kini berjalan tanpa akselerasi grafis.", "Mode baru Ringan (±40 MB), paling aman untuk iPhone.", "Kalau aplikasi masih tertutup sendiri, pengaturan otomatis turun ke yang lebih ringan saat dibuka lagi."],
+      en: ["Fix: the app closed itself on iPhone while preparing the model. On iPhone the model now runs without graphics acceleration.", "New Light mode (~40 MB), safest on iPhone.", "If the app still closes itself, settings step down to a lighter option automatically when reopened."] },
     { v: "1.4.0", d: "2026-11-09", items: ["Rekaman panjang tidak lagi dibuka sekaligus: untuk .m4a (Voice Memos), .wav dan .mp3 hanya menit yang dipilih yang dibaca, per 10 menit. Ini mencegah halaman tertutup sendiri di iPhone.", "Kalau aplikasi sempat tertutup sendiri, saat dibuka lagi muncul keterangan di tahap mana dan detail errornya."],
       en: ["Long recordings are no longer opened all at once: for .m4a (Voice Memos), .wav and .mp3 only the chosen minutes are read, 10 minutes at a time. This stops iPhone from reloading the page.", "If the app closed itself, reopening it shows at which stage and the error details."] },
     { v: "1.3.1", d: "2026-11-09", items: ["Perbaikan: transkrip dari file gagal setelah unduhan model selesai di perangkat yang mendukung WebGPU (Chrome laptop, iOS terbaru).", "Kalau WebGPU bermasalah, otomatis pindah ke mode CPU (WASM).", "Saat gagal, muncul detail error yang bisa disalin dan dikirim untuk diperbaiki."],
@@ -504,9 +506,11 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // ---------- transcribe an uploaded recording, on this device (Whisper via Transformers.js) ----------
   const TJS = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
   // onnx-community builds ship every precision (fp32, q4, q8), so both WebGPU and WASM settings find their files
-  const MODELS = { fast: "onnx-community/whisper-base", accurate: "onnx-community/whisper-small" };
-  const isPhone = /iPhone|iPad|Android/i.test(navigator.userAgent);
+  const MODELS = { light: "onnx-community/whisper-tiny", fast: "onnx-community/whisper-base", accurate: "onnx-community/whisper-small" };
+  const isPhone = /iPhone|iPad|Android/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isIOS = /iPhone|iPad/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   $("asrModel").value = getPref("asrModel", isPhone ? "fast" : "accurate");
+  if (!$("asrModel").value) $("asrModel").value = "fast";
   $("asrModel").onchange = () => setPref("asrModel", $("asrModel").value);
   // The model runs in a worker so the page stays responsive. Built from a string so the app stays one file.
   const WORKER_SRC = `
@@ -515,13 +519,15 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     async function build(model, useGpu) {
       const { pipeline, env } = await import("${TJS}");
       env.allowLocalModels = false;
+      try { env.backends.onnx.wasm.numThreads = 1; } catch (e) {} // no shared memory on GitHub Pages; keep one thread
       return pipeline("automatic-speech-recognition", model, useGpu
         ? { device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" }, progress_callback: progress }
         : { device: "wasm", dtype: "q8", progress_callback: progress });
     }
-    async function load(model) {
+    async function load(model, noGpu) {
       let gpu = false;
-      try { gpu = !!(self.navigator && navigator.gpu && await navigator.gpu.requestAdapter()); } catch (e) { gpu = false; }
+      if (!noGpu) { try { gpu = !!(self.navigator && navigator.gpu && await navigator.gpu.requestAdapter()); } catch (e) { gpu = false; } }
+      self.postMessage({ type: "trying", engine: gpu ? "WebGPU" : "WASM" });
       if (gpu) {
         try { pipe = await build(model, true); engine = "WebGPU"; return; }
         catch (e) { self.postMessage({ type: "note", message: "WebGPU gagal, pindah ke WASM: " + (e && e.message || e) }); }
@@ -532,7 +538,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
       const m = e.data;
       try {
         if (m.type === "load") {
-          if (loaded !== m.model) { pipe = null; await load(m.model); loaded = m.model; }
+          if (loaded !== m.model) { pipe = null; await load(m.model, m.noGpu); loaded = m.model; }
           self.postMessage({ type: "ready", engine });
         } else if (m.type === "chunk") {
           let out;
@@ -770,7 +776,8 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     } };
   }
   // remember what was running, so after an iOS memory crash the app can say where it died
-  const crumb = (o) => { try { if (o) localStorage.setItem("rk:asrCrumb", JSON.stringify(o)); else localStorage.removeItem("rk:asrCrumb"); } catch (e) {} };
+  let curCrumb = null;
+  const crumb = (o) => { curCrumb = o; try { if (o) localStorage.setItem("rk:asrCrumb", JSON.stringify(o)); else localStorage.removeItem("rk:asrCrumb"); } catch (e) {} };
 
   $("asrGo").onclick = () => runAsr(false);
   $("asrNext").onclick = () => runAsr(true);
@@ -808,6 +815,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
         w.onmessage = (e) => {
           const m = e.data;
           if (m.type === "note") { lastNote = m.message; return; }
+          if (m.type === "trying") { crumb({ ...(curCrumb || {}), engine: m.engine }); return; }
           if (m.type === "dl") { asrMsg(tr("Mengunduh model pengenal suara (sekali saja)… ", "Downloading the speech model (one time only)… ") + Math.round(m.loaded / 1048576) + "/" + Math.round(m.total / 1048576) + " MB"); asrBar(m.loaded / m.total); return; }
           if (m.type === "error") { rej(new Error(m.message)); return; }
           res(m);
@@ -816,7 +824,8 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
         w.postMessage(msg);
       });
       asrMsg(tr("Menyiapkan model pengenal suara…", "Preparing the speech model…"));
-      const ready = await ask({ type: "load", model });
+      const noGpu = isIOS || getPref("noGpu", "0") === "1";
+      const ready = await ask({ type: "load", model, noGpu });
       asrEngine = ready.engine || "";
       if (run.stop) throw { stopped: true };
       $("liveCard").hidden = false; paintLive();
@@ -897,11 +906,15 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     if (c) {
       crumb(null);
       setTimeout(() => {
-        asrMsg(c.phase === "model"
-          ? tr("Aplikasi tertutup sendiri saat memuat model pengenal suara. Kemungkinan memori HP tidak cukup: pilih mode Cepat, tutup aplikasi lain, atau pakai laptop.", "The app closed itself while loading the speech model, probably out of memory: choose Fast mode, close other apps, or use a laptop.")
-          : c.phase === "decode"
-          ? tr("Aplikasi tertutup sendiri saat membaca file (" + (c.kind || "?") + ", menit " + (c.at || "?") + "). Kemungkinan memori HP tidak cukup untuk format file ini.", "The app closed itself while reading the file (" + (c.kind || "?") + ", at " + (c.at || "?") + "), probably out of memory for this file format.")
-          : tr("Aplikasi tertutup sendiri saat mentranskrip (menit " + (c.at || "?") + "). Kemungkinan memori HP tidak cukup: pilih mode Cepat atau pakai laptop.", "The app closed itself while transcribing (at " + (c.at || "?") + "), probably out of memory: choose Fast mode or use a laptop."));
+        let msg;
+        if (c.phase === "model") {
+          if (c.engine === "WebGPU") { setPref("noGpu", "1"); msg = tr("Aplikasi tertutup saat menyiapkan model dengan akselerasi grafis. Akselerasi grafis sekarang dimatikan; silakan coba lagi.", "The app closed while preparing the model with graphics acceleration. It is now switched off; please try again."); }
+          else if (c.model === "accurate") { $("asrModel").value = "fast"; setPref("asrModel", "fast"); msg = tr("Mode Akurat terlalu berat untuk perangkat ini. Mode diganti ke Cepat; silakan coba lagi.", "Accurate mode is too heavy for this device. Switched to Fast; please try again."); }
+          else if (c.model === "fast") { $("asrModel").value = "light"; setPref("asrModel", "light"); msg = tr("Mode Cepat terlalu berat untuk memori HP ini. Mode diganti ke Ringan; silakan coba lagi. Hasilnya bisa kurang akurat.", "Fast mode is too heavy for this phone's memory. Switched to Light; please try again. Results may be less accurate."); }
+          else msg = tr("HP ini tidak sanggup menjalankan model pengenal suara, bahkan mode Ringan. Untuk transkrip dari file, pakai laptop (Chrome/Edge) dengan link yang sama.", "This phone cannot run the speech model, even in Light mode. To transcribe files, use a laptop (Chrome/Edge) with the same link.");
+        } else if (c.phase === "decode") msg = tr("Aplikasi tertutup sendiri saat membaca file (" + (c.kind || "?") + ", menit " + (c.at || "?") + "). Kemungkinan memori HP tidak cukup untuk format file ini.", "The app closed itself while reading the file (" + (c.kind || "?") + ", at " + (c.at || "?") + "), probably out of memory for this file format.");
+        else msg = tr("Aplikasi tertutup sendiri saat mentranskrip (menit " + (c.at || "?") + "). Coba mode yang lebih ringan atau pakai laptop.", "The app closed itself while transcribing (at " + (c.at || "?") + "). Try a lighter mode or use a laptop.");
+        asrMsg(msg);
         showErrDetail("crash during " + c.phase + " " + JSON.stringify(c));
       }, 0);
     }
