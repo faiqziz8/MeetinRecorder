@@ -175,6 +175,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
       <button class="btn" id="copyText"><span data-en="Salin transkrip">Salin transkrip</span></button>
       <button class="btn" id="dlText"><span data-en="Unduh .txt">Unduh .txt</span></button>
       <button class="btn" id="dlAudio" hidden><span data-en="Unduh audio">Unduh audio</span></button>
+      <button class="btn" id="tidyBtn"><span data-en="Tidy repeated words">Rapikan kata berulang</span></button>
     </div>
     <ol class="steps">
       <li data-en="Tap Copy for Notulen.">Tekan <b>Salin untuk Notulen</b>.</li>
@@ -207,8 +208,10 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // ---------- version ----------
   // Bump APP_VERSION (x.y.z) and add an entry on top for every change.
   // x Major = big change, y Minor = new feature, z Patch = fix or small tweak.
-  const APP_VERSION = "1.4.1";
+  const APP_VERSION = "1.4.2";
   const CHANGELOG = [
+    { v: "1.4.2", d: "2026-11-09", items: ["Perbaikan: transkrip dari file tidak lagi berisi kata yang berulang terus (mis. \"kayak, kayak, kayak…\").", "Tombol Rapikan kata berulang untuk membersihkan transkrip yang sudah ada."],
+      en: ["Fix: file transcripts no longer contain endlessly repeated words (e.g. \"kayak, kayak, kayak…\").", "Tidy repeated words button to clean an existing transcript."] },
     { v: "1.4.1", d: "2026-11-09", items: ["Perbaikan: aplikasi tertutup sendiri di iPhone saat menyiapkan model. Di iPhone model kini berjalan tanpa akselerasi grafis.", "Mode baru Ringan (±40 MB), paling aman untuk iPhone.", "Kalau aplikasi masih tertutup sendiri, pengaturan otomatis turun ke yang lebih ringan saat dibuka lagi."],
       en: ["Fix: the app closed itself on iPhone while preparing the model. On iPhone the model now runs without graphics acceleration.", "New Light mode (~40 MB), safest on iPhone.", "If the app still closes itself, settings step down to a lighter option automatically when reopened."] },
     { v: "1.4.0", d: "2026-11-09", items: ["Rekaman panjang tidak lagi dibuka sekaligus: untuk .m4a (Voice Memos), .wav dan .mp3 hanya menit yang dipilih yang dibaca, per 10 menit. Ini mencegah halaman tertutup sendiri di iPhone.", "Kalau aplikasi sempat tertutup sendiri, saat dibuka lagi muncul keterangan di tahap mana dan detail errornya."],
@@ -438,6 +441,13 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     const txt = "JUDUL: " + s.title + "\nWAKTU: " + metaLine(s) + "\n---\n" + $("text").value.trim();
     toast((await copy(txt)) ? tr("Tersalin. Tempel di menu Notulen aplikasi Meja Kerja.", "Copied. Paste it in the Notulen menu of the Meja Kerja app.") : tr("Gagal menyalin. Tekan lama pada transkrip lalu Copy.", "Could not copy. Long-press the transcript and Copy."));
   };
+  $("tidyBtn").onclick = () => {
+    const before = $("text").value;
+    const after = before.split("\n").map((l) => { const m = l.match(/^(\[[^\]]+\]\s*)(.*)$/); return m ? m[1] + cleanRepeats(m[2]) : cleanRepeats(l); }).join("\n");
+    if (after === before) { toast(tr("Tidak ada kata berulang yang perlu dirapikan.", "No repeated words to tidy.")); return; }
+    $("text").value = after; persistEdit();
+    toast(tr("Kata yang berulang sudah dirapikan.", "Repeated words tidied."));
+  };
   $("copyText").onclick = async () => { toast((await copy($("text").value)) ? tr("Transkrip tersalin.", "Transcript copied.") : tr("Gagal menyalin.", "Could not copy.")); };
   function download(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
   const fileName = (s, ext) => (s.title || "rapat").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 60) + "." + ext;
@@ -541,14 +551,19 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
           if (loaded !== m.model) { pipe = null; await load(m.model, m.noGpu); loaded = m.model; }
           self.postMessage({ type: "ready", engine });
         } else if (m.type === "chunk") {
+          const opts = { language: m.lang, task: "transcribe", max_new_tokens: 160, no_repeat_ngram_size: 3 };
           let out;
-          try { out = await pipe(m.audio, { language: m.lang, task: "transcribe" }); }
+          try { out = await pipe(m.audio, opts); }
           catch (err) {
-            if (engine !== "WebGPU") throw err;
-            // some GPUs load the model but fail when running it: retry this part on the CPU
-            self.postMessage({ type: "note", message: "WebGPU error, retry WASM: " + (err && err.message || err) });
-            pipe = await build(loaded, false); engine = "WASM";
-            out = await pipe(m.audio, { language: m.lang, task: "transcribe" });
+            if (engine !== "WebGPU") {
+              // older runtimes may reject an option: retry with the plain settings
+              out = await pipe(m.audio, { language: m.lang, task: "transcribe", max_new_tokens: 160 });
+            } else {
+              // some GPUs load the model but fail when running it: retry this part on the CPU
+              self.postMessage({ type: "note", message: "WebGPU error, retry WASM: " + (err && err.message || err) });
+              pipe = await build(loaded, false); engine = "WASM";
+              out = await pipe(m.audio, opts);
+            }
           }
           self.postMessage({ type: "text", i: m.i, text: (out && out.text || "").trim(), engine });
         }
@@ -622,6 +637,24 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
     const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
     return (await off.startRendering()).getChannelData(0);
+  }
+  // Small Whisper models can loop ("kayak, kayak, kayak…"). Collapse any 1–6 word phrase repeated 3+ times in a row.
+  function cleanRepeats(text) {
+    const w = String(text || "").split(/\s+/).filter(Boolean);
+    const norm = w.map((x) => x.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""));
+    const out = [];
+    let i = 0;
+    while (i < w.length) {
+      let done = false;
+      for (let n = 1; n <= 6 && !done; n++) {
+        if (i + n * 3 > w.length) continue;
+        const same = (a, b) => { for (let k = 0; k < n; k++) if (norm[a + k] !== norm[b + k] || !norm[a + k]) return false; return true; };
+        let reps = 1; while (i + (reps + 1) * n <= w.length && same(i, i + reps * n)) reps++;
+        if (reps >= 3) { for (let k = 0; k < n; k++) out.push(w[i + k]); out[out.length - 1] = out[out.length - 1].replace(/[,;]+$/, "") + "…"; i += reps * n; done = true; }
+      }
+      if (!done) { out.push(w[i]); i++; }
+    }
+    return out.join(" ");
   }
   // Whisper invents stock phrases on silence; drop those and exact repeats
   const HALLU = /^(terima kasih( telah menonton| sudah menonton)?|thanks for watching|subtitle(s)? by|sampai jumpa( lagi)?)[.!]?$/i;
@@ -851,7 +884,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
           let rms = 0, cnt = 0; for (let k = 0; k < chunk.length; k += 7) { rms += chunk[k] * chunk[k]; cnt++; } // odd stride avoids aliasing on pure tones
           if (Math.sqrt(rms / Math.max(1, cnt)) < 0.004) continue; // silence
           const m = await ask({ type: "chunk", i, audio: chunk, lang });
-          const txt = (m.text || "").replace(/\s+/g, " ").trim();
+          const txt = cleanRepeats((m.text || "").replace(/\s+/g, " ").trim());
           const last = session.segs[session.segs.length - 1];
           if (txt && !HALLU.test(txt) && !(last && last.text === txt)) { session.segs.push({ t: at, text: txt }); paintLive(); }
           session.text = segsToText(session.segs); saveSession(session);
