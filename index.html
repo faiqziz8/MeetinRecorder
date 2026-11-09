@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Meeting Recorder">
+<meta name="theme-color" content="#eef1f5">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="apple-touch-icon.png">
+<title>Meeting Recorder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Same ink-on-cool-paper system as the main app; one column, big record control */
+  --bg: #eef1f5; --surface: #ffffff; --ink: #17202e; --muted: #5d6878; --line: #d6dce5;
+  --accent: #1f4fd1; --accent-soft: #e3eafc; --rec: #d92d3a; --rec-soft: #fde6e8;
+  --done: #1b8a4c; --warn: #a35f00; --warn-soft: #fbf0dc;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.t-light) { --bg: #0f141c; --surface: #18202c; --ink: #e6ebf2; --muted: #95a1b2; --line: #2a3443; --accent: #7c9cff; --accent-soft: #1f2a46; --rec: #ff6b76; --rec-soft: #3a1a1e; --done: #4cc386; --warn: #e6a94a; --warn-soft: #33270f; color-scheme: dark; }
+}
+html.t-dark:root { --bg: #0f141c; --surface: #18202c; --ink: #e6ebf2; --muted: #95a1b2; --line: #2a3443; --accent: #7c9cff; --accent-soft: #1f2a46; --rec: #ff6b76; --rec-soft: #3a1a1e; --done: #4cc386; --warn: #e6a94a; --warn-soft: #33270f; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.45; -webkit-tap-highlight-color: transparent; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 40px; display: grid; gap: 14px; }
+header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
+.brand { font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); flex: 1; white-space: nowrap; }
+.ver { margin-left: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 1px 8px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none; }
+.icon { width: 38px; height: 38px; border: 0; background: transparent; border-radius: 8px; display: grid; place-items: center; color: var(--muted); }
+.icon svg { width: 22px; height: 22px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+.card h2 { margin: 0; font-size: 17px; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.recbox { text-align: center; justify-items: center; }
+.timer { font-family: var(--font-mono); font-size: 34px; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.recbtn { width: 92px; height: 92px; border-radius: 50%; border: 4px solid var(--rec); background: var(--surface); display: grid; place-items: center; padding: 0; }
+.recbtn i { width: 56px; height: 56px; border-radius: 50%; background: var(--rec); transition: all .2s; }
+.recbtn.on i { width: 34px; height: 34px; border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) { .recbtn i { transition: none; } }
+.status { font-size: 14px; color: var(--muted); min-height: 20px; }
+.status.live { color: var(--rec); font-weight: 600; }
+.status.live::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rec); margin-right: 6px; vertical-align: 1px; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { .status.live::before { animation: none; } }
+.row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.row.end { justify-content: flex-end; }
+.row.start { justify-content: flex-start; }
+.btn { height: 42px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.ghost { background: transparent; }
+.btn.danger { color: var(--rec); }
+.btn[disabled] { opacity: .5; cursor: default; }
+.opts { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; font-size: 14px; color: var(--muted); }
+.opts label { display: inline-flex; align-items: center; gap: 6px; }
+.opts select { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 4px 8px; }
+.opts input { width: 18px; height: 18px; accent-color: var(--accent); }
+.live { max-height: 46vh; overflow: auto; display: grid; gap: 6px; font-size: 15px; }
+.seg { display: grid; grid-template-columns: 52px 1fr; gap: 8px; }
+.seg time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 3px; }
+.interim { color: var(--muted); font-style: italic; }
+.seg.gap span { color: var(--warn); font-weight: 600; font-size: 14px; }
+.empty { color: var(--muted); font-size: 14px; text-align: center; padding: 14px 0; }
+.field { display: grid; gap: 6px; min-width: 0; }
+.field label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.field input, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); }
+.field textarea { min-height: 260px; resize: vertical; font-size: 15px; line-height: 1.5; }
+.steps { margin: 0; padding-left: 20px; font-size: 14px; display: grid; gap: 4px; }
+.hist { display: grid; gap: 8px; }
+.hrow { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); text-align: left; width: 100%; }
+.hrow b { display: block; overflow-wrap: anywhere; }
+.hrow small { color: var(--muted); font-size: 12px; }
+.hrow span { flex: 1; min-width: 0; }
+.warnbox { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.warnbox[hidden], [hidden] { display: none !important; }
+.scrim { position: fixed; inset: 0; background: rgba(8,12,20,.5); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--surface); width: 100%; max-width: 640px; max-height: 92%; overflow: auto; border-radius: 18px 18px 0 0; padding: 18px 16px 24px; display: grid; gap: 14px; }
+@media (min-width: 700px) { .scrim { align-items: center; } .sheet { border-radius: 18px; } }
+.sheet h2 { margin: 0; font-size: 19px; }
+.seg2 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; background: var(--line); border-radius: 11px; }
+.seg2.two { grid-template-columns: 1fr 1fr; }
+.seg2 button { height: 38px; border: 0; border-radius: 8px; background: transparent; font-weight: 600; font-size: 14px; color: var(--muted); }
+.seg2 button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.about { display: grid; gap: 4px; padding: 12px 14px; border-radius: 12px; background: var(--bg); font-size: 14px; }
+.about .copy { color: var(--muted); }
+.vitem { border-left: 3px solid var(--accent); padding-left: 12px; font-size: 14px; }
+.vitem ul { margin: 6px 0 0; padding-left: 18px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; max-width: calc(100% - 32px); }
+.foot { text-align: center; font-size: 12px; color: var(--muted); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><span>Meeting Recorder</span><button class="ver" id="verBtn" aria-label="Riwayat versi" data-en-aria="Version history"></button></div>
+    <button class="icon" id="setBtn" aria-label="Pengaturan" data-en-aria="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </header>
+
+  <div class="warnbox" id="unsupported" hidden></div>
+  <div class="card" id="resumeCard" hidden>
+    <h2 data-en="Rekaman sebelumnya terputus">Rekaman sebelumnya terputus</h2>
+    <p class="hint" id="resumeInfo"></p>
+    <div class="row start"><button class="btn primary" id="resumeBtn"><span data-en="Lanjutkan rekaman">Lanjutkan rekaman</span></button><button class="btn" id="finishBtn"><span data-en="Simpan sebagai selesai">Simpan sebagai selesai</span></button></div>
+  </div>
+
+  <section class="card recbox" id="recCard">
+    <div class="timer" id="timer">00:00</div>
+    <button class="recbtn" id="recBtn" aria-label="Mulai rekam" data-en-aria="Start recording"><i></i></button>
+    <div class="status" id="status" data-en="Tekan tombol merah untuk mulai">Tekan tombol merah untuk mulai</div>
+    <div class="row" id="recCtl" hidden>
+      <button class="btn" id="pauseBtn"><span data-en="Jeda">Jeda</span></button>
+      <button class="btn danger" id="stopBtn"><span data-en="Selesai">Selesai</span></button>
+    </div>
+    <div class="opts" id="opts">
+      <label for="langSel"><span data-en="Bahasa rapat">Bahasa rapat</span>
+        <select id="langSel"><option value="id-ID">Indonesia</option><option value="en-US">English</option></select></label>
+      <label for="audioChk"><input type="checkbox" id="audioChk"> <span data-en="Simpan audio juga">Simpan audio juga</span></label>
+    </div>
+    <p class="hint" data-en="Biarkan layar tetap menyala dan aplikasi tetap terbuka selama merekam. Butuh internet.">Biarkan layar tetap menyala dan aplikasi tetap terbuka selama merekam. Butuh internet.</p>
+  </section>
+
+  <section class="card" id="liveCard" hidden>
+    <h2 data-en="Transkrip langsung">Transkrip langsung</h2>
+    <div class="live" id="live" aria-live="polite"></div>
+  </section>
+
+  <section class="card" id="doneCard" hidden>
+    <h2 data-en="Hasil rekaman">Hasil rekaman</h2>
+    <div class="field"><label for="title" data-en="Judul rapat">Judul rapat</label><input id="title"></div>
+    <div class="field"><label for="text" data-en="Transkrip (bisa diedit)">Transkrip (bisa diedit)</label><textarea id="text"></textarea></div>
+    <div class="row start">
+      <button class="btn primary" id="copyNotulen"><span data-en="Salin untuk Notulen">Salin untuk Notulen</span></button>
+      <button class="btn" id="copyText"><span data-en="Salin transkrip">Salin transkrip</span></button>
+      <button class="btn" id="dlText"><span data-en="Unduh .txt">Unduh .txt</span></button>
+      <button class="btn" id="dlAudio" hidden><span data-en="Unduh audio">Unduh audio</span></button>
+    </div>
+    <ol class="steps">
+      <li data-en="Tap Copy for Notulen.">Tekan <b>Salin untuk Notulen</b>.</li>
+      <li data-en="Open the Meja Kerja app, choose the Notulen menu (microphone icon at the bottom), paste, then tap Make minutes.">Buka aplikasi <b>Meja Kerja</b>, pilih menu <b>Notulen</b> (ikon mikrofon di bawah), tempel, lalu tekan <b>Buat notulen</b>.</li>
+      <li data-en="You get a summary, decisions, follow-ups and speaker guesses.">Ringkasan, keputusan, tindak lanjut, dan tebakan pembicara akan muncul di sana.</li>
+    </ol>
+    <div class="row start"><button class="btn ghost" id="newRec"><span data-en="Rekam baru">Rekam baru</span></button><button class="btn ghost danger" id="delRec"><span data-en="Hapus rekaman ini">Hapus rekaman ini</span></button></div>
+  </section>
+
+  <section class="card">
+    <h2 data-en="Riwayat rekaman">Riwayat rekaman</h2>
+    <div class="hist" id="hist"></div>
+    <p class="hint" data-en="Saved only in this phone's browser. Use Settings → Download backup now and then.">Tersimpan hanya di browser HP ini. Sesekali unduh backup lewat Pengaturan.</p>
+  </section>
+
+  <footer class="foot">© 2026 Faiq Aziz</footer>
+</div>
+<div class="scrim" id="scrim" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" hidden></div>
+<input type="file" id="importFile" accept="application/json,.json" class="sr" tabindex="-1">
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const pad = (n) => String(n).padStart(2, "0");
+  const mmss = (sec) => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60; return (h ? h + ":" + pad(m) : pad(m)) + ":" + pad(s); };
+
+  // ---------- version ----------
+  // Bump APP_VERSION (x.y.z) and add an entry on top for every change.
+  // x Major = big change, y Minor = new feature, z Patch = fix or small tweak.
+  const APP_VERSION = "1.1.1";
+  const CHANGELOG = [
+    { v: "1.1.1", d: "2026-11-09", items: ["Nama aplikasi berganti dari Rekam Rapat menjadi Meeting Recorder."], en: ["The app is renamed from Rekam Rapat to Meeting Recorder."] },
+    { v: "1.1.0", d: "2026-11-08",
+      items: ["Kalau HP terkunci atau aplikasi ditinggal saat merekam, rekaman lanjut otomatis begitu aplikasi dibuka lagi.", "Bagian yang terputus ditandai di transkrip, mis. [terputus 12:30–14:05].", "Kalau iPhone sampai menutup aplikasi, transkrip yang sudah terekam tetap aman dan rekaman bisa dilanjutkan atau disimpan sebagai selesai."],
+      en: ["If the phone locks or you leave the app while recording, recording resumes automatically when you come back.", "Missing parts are marked in the transcript, e.g. [interrupted 12:30–14:05].", "If iPhone closes the app completely, the transcript so far is kept and you can resume or save it as finished."] },
+    { v: "1.0.0", d: "2026-11-08",
+      items: ["Rilis pertama: rekam rapat dengan transkrip langsung (Bahasa Indonesia atau Inggris).", "Jeda dan lanjut, riwayat rekaman, unduh transkrip .txt, opsi simpan audio.", "Tombol Salin untuk Notulen untuk dibuat ringkasannya di aplikasi Meja Kerja.", "Pengaturan tema, bahasa, backup, dan hak cipta."],
+      en: ["First release: record meetings with a live transcript (Indonesian or English).", "Pause and resume, recording history, download .txt transcript, optional audio saving.", "Copy for Notulen button to summarise it in the Meja Kerja app.", "Settings for theme, language, backup and copyright."] },
+  ];
+
+  // ---------- prefs ----------
+  const getPref = (k, d) => { try { return localStorage.getItem("rk:" + k) || d; } catch (e) { return d; } };
+  const setPref = (k, v) => { try { localStorage.setItem("rk:" + k, v); } catch (e) {} };
+  let lang = getPref("lang", "id") === "en" ? "en" : "id";
+  let theme = ["light", "dark"].includes(getPref("theme", "system")) ? getPref("theme", "system") : "system";
+  const tr = (id, en) => (lang === "en" ? en : id);
+  const LOC = () => (lang === "en" ? "en-GB" : "id-ID");
+  function applyTheme() { document.documentElement.classList.toggle("t-light", theme === "light"); document.documentElement.classList.toggle("t-dark", theme === "dark"); }
+  function applyStatic() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-en]").forEach((el) => { if (el.dataset.id === undefined) el.dataset.id = el.innerHTML; el.innerHTML = lang === "en" ? esc(el.dataset.en) : el.dataset.id; });
+    document.querySelectorAll("[data-en-aria]").forEach((el) => { if (el.dataset.idAria === undefined) el.dataset.idAria = el.getAttribute("aria-label") || ""; el.setAttribute("aria-label", lang === "en" ? el.dataset.enAria : el.dataset.idAria); });
+  }
+  applyTheme();
+  $("verBtn").textContent = "v" + APP_VERSION;
+  $("langSel").value = getPref("speechLang", "id-ID");
+  $("audioChk").checked = getPref("audio", "0") === "1";
+  $("langSel").onchange = () => setPref("speechLang", $("langSel").value);
+  $("audioChk").onchange = () => setPref("audio", $("audioChk").checked ? "1" : "0");
+
+  // ---------- storage ----------
+  const loadAll = () => { try { const a = JSON.parse(localStorage.getItem("rk:sessions") || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+  function saveSession(s) {
+    const all = loadAll().filter((x) => x.id !== s.id);
+    all.unshift(s);
+    try { localStorage.setItem("rk:sessions", JSON.stringify(all.slice(0, 200))); }
+    catch (e) { toast(tr("Memori browser penuh. Hapus rekaman lama atau unduh backup.", "Browser storage is full. Delete old recordings or download a backup.")); }
+  }
+  const segsToText = (segs) => segs.map((g) => "[" + mmss(g.t) + "] " + g.text).join("\n");
+
+  // ---------- recording ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    $("unsupported").textContent = tr("Browser ini tidak punya pengenal suara. Buka halaman ini di Safari (iPhone) atau Chrome.", "This browser has no speech recognition. Open this page in Safari (iPhone) or Chrome.");
+    $("unsupported").hidden = false;
+    $("recBtn").disabled = true;
+  }
+  let rec = null, state = "idle", session = null, startedAt = 0, elapsedBefore = 0, tick = null, interim = "", wake = null;
+  let media = null, chunks = [], audioBlob = null, audioType = "";
+  const elapsed = () => elapsedBefore + (state === "rec" ? (Date.now() - startedAt) / 1000 : 0);
+
+  function setStatus(txt, live) { $("status").removeAttribute("data-en"); $("status").textContent = txt; $("status").classList.toggle("live", !!live); }
+  function paintLive() {
+    const box = $("live");
+    if (!session.segs.length && !interim) { box.innerHTML = '<div class="empty">' + tr("Mulai bicara, teks akan muncul di sini…", "Start speaking, text appears here…") + '</div>'; return; }
+    box.innerHTML = session.segs.map((g) => '<div class="seg' + (g.gap ? " gap" : "") + '"><time>' + mmss(g.t) + '</time><span>' + esc(g.text) + '</span></div>').join("") +
+      (interim ? '<div class="seg"><time>' + mmss(elapsed()) + '</time><span class="interim">' + esc(interim) + '</span></div>' : "");
+    box.scrollTop = box.scrollHeight;
+  }
+  function makeRec() {
+    const r = new SR();
+    r.lang = $("langSel").value; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    r.onresult = (e) => {
+      let inter = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i], txt = res[0].transcript.trim();
+        if (!txt) continue;
+        if (res.isFinal) {
+          const last = session.segs[session.segs.length - 1];
+          if (!last || last.text !== txt) session.segs.push({ t: Math.max(0, elapsed() - 2, last ? (last.gap ? last.end : last.t) : 0), text: txt }); // iOS can repeat a final result after restart
+        } else inter += (inter ? " " : "") + txt;
+      }
+      interim = inter;
+      paintLive();
+      autosave();
+    };
+    r.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") { stopAll(); alertBox(tr("Izin mikrofon ditolak. Buka Settings iPhone → Safari → Microphone, pilih Allow, lalu muat ulang halaman.", "Microphone permission was denied. Open iPhone Settings → Safari → Microphone, choose Allow, then reload the page.")); }
+      else if (e.error === "network") setStatus(tr("Koneksi terputus, mencoba lagi…", "Connection lost, retrying…"), true);
+    };
+    // Safari ends recognition after pauses; restart while we are still recording
+    r.onend = () => { if (state === "rec") setTimeout(() => { if (state === "rec") { try { rec = makeRec(); rec.start(); } catch (e) {} } }, 250); };
+    return r;
+  }
+  let saveT = null;
+  function autosave() { clearTimeout(saveT); saveT = setTimeout(() => { if (!session) return; session.dur = Math.round(elapsed()); session.text = segsToText(session.segs); session.active = state !== "idle"; session.savedAt = Date.now(); saveSession(session); }, 800); }
+  async function keepAwake() { try { if ("wakeLock" in navigator) wake = await navigator.wakeLock.request("screen"); } catch (e) { wake = null; } }
+  // iOS freezes web pages when the phone locks or the app goes to the background.
+  // Mark the missing stretch in the transcript and pick up again when the page is back.
+  const gapText = (a, b) => "[" + tr("terputus ", "interrupted ") + mmss(a) + "–" + mmss(b) + "]";
+  function addGap(a, b) { if (b - a < 3) return; session.segs.push({ t: a, end: b, text: gapText(a, b), gap: true }); }
+  let hiddenAt = null, hbT = null;
+  document.addEventListener("visibilitychange", () => {
+    if (state !== "rec") return;
+    if (document.visibilityState === "hidden") { hiddenAt = elapsed(); autosave(); return; }
+    if (hiddenAt !== null) {
+      addGap(hiddenAt, elapsed()); hiddenAt = null;
+      interim = "";
+      try { rec && rec.abort(); } catch (e) {}
+      try { rec = makeRec(); rec.start(); } catch (e) {}
+      if (media && media.state === "paused") { try { media.resume(); } catch (e) {} }
+      paintLive(); autosave();
+      toast(tr("Rekaman dilanjutkan. Bagian yang terputus ditandai di transkrip.", "Recording resumed. The missing part is marked in the transcript."));
+    }
+    keepAwake();
+  });
+  // heartbeat so a page that iOS closes completely still has a recent save to resume from
+  function heartbeat(on) { clearInterval(hbT); if (on) hbT = setInterval(() => { if (state === "rec") autosave(); }, 5000); }
+
+  async function start() {
+    if (!SR) return;
+    const now = new Date();
+    session = { id: "s" + now.getTime(), date: now.toISOString(), title: tr("Rapat ", "Meeting ") + new Intl.DateTimeFormat(LOC(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(now), segs: [], text: "", dur: 0, lang: $("langSel").value };
+    elapsedBefore = 0; interim = ""; audioBlob = null; chunks = [];
+    $("doneCard").hidden = true; $("liveCard").hidden = false; $("opts").hidden = true; $("recCtl").hidden = false;
+    if ($("audioChk").checked && navigator.mediaDevices && window.MediaRecorder) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        media = new MediaRecorder(stream);
+        audioType = media.mimeType || "audio/mp4";
+        media.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        media.onstop = () => { audioBlob = new Blob(chunks, { type: audioType }); stream.getTracks().forEach((t) => t.stop()); $("dlAudio").hidden = false; };
+        media.start(1000);
+      } catch (e) { media = null; toast(tr("Audio tidak bisa disimpan, hanya transkrip yang direkam.", "Audio cannot be saved; only the transcript is recorded.")); }
+    }
+    resume();
+  }
+  function resume() {
+    state = "rec"; startedAt = Date.now(); heartbeat(true);
+    try { rec = makeRec(); rec.start(); } catch (e) {}
+    if (media && media.state === "paused") media.resume();
+    keepAwake();
+    $("recBtn").classList.add("on"); $("recBtn").setAttribute("aria-label", tr("Selesai rekam", "Stop recording"));
+    $("pauseBtn").textContent = tr("Jeda", "Pause");
+    setStatus(tr("Merekam…", "Recording…"), true);
+    clearInterval(tick); tick = setInterval(() => { $("timer").textContent = mmss(elapsed()); }, 500);
+    paintLive();
+  }
+  function pause() {
+    elapsedBefore = elapsed(); state = "paused"; heartbeat(false); autosave();
+    try { rec && rec.stop(); } catch (e) {}
+    if (media && media.state === "recording") media.pause();
+    interim = ""; paintLive();
+    $("pauseBtn").textContent = tr("Lanjut", "Resume");
+    setStatus(tr("Dijeda", "Paused"));
+  }
+  function stopAll() {
+    if (state === "idle") return;
+    if (state === "rec") elapsedBefore = elapsed();
+    state = "idle";
+    try { rec && rec.stop(); } catch (e) {}
+    if (media && media.state !== "inactive") media.stop();
+    media = null;
+    clearInterval(tick);
+    if (wake) { try { wake.release(); } catch (e) {} wake = null; }
+    if (interim) { session.segs.push({ t: Math.max(0, elapsedBefore - 2), text: interim }); interim = ""; }
+    heartbeat(false); clearTimeout(saveT);
+    session.dur = Math.round(elapsedBefore);
+    session.text = segsToText(session.segs);
+    session.active = false;
+    saveSession(session);
+    $("recBtn").classList.remove("on"); $("recBtn").setAttribute("aria-label", tr("Mulai rekam", "Start recording"));
+    $("recCtl").hidden = true; $("opts").hidden = false; $("liveCard").hidden = true;
+    setStatus(tr("Selesai. Durasi ", "Done. Length ") + mmss(session.dur));
+    openDone(session, true);
+    renderHist();
+  }
+  $("recBtn").onclick = () => { if (state === "idle") start(); else stopAll(); };
+
+  const lost = loadAll().find((x) => x.active && Array.isArray(x.segs));
+  if (lost) {
+    $("resumeInfo").textContent = lost.title + " · " + mmss(lost.dur || 0) + tr(" terekam. iPhone menutup aplikasi saat layar terkunci atau aplikasi ditinggalkan.", " recorded. iPhone closed the app while the screen was locked or the app was in the background.");
+    $("resumeCard").hidden = false;
+    $("resumeBtn").onclick = () => {
+      $("resumeCard").hidden = true;
+      session = lost;
+      const a = lost.dur || 0, b = a + Math.max(0, (Date.now() - (lost.savedAt || Date.now())) / 1000);
+      addGap(a, b);
+      elapsedBefore = b; interim = ""; audioBlob = null; media = null;
+      $("doneCard").hidden = true; $("liveCard").hidden = false; $("opts").hidden = true; $("recCtl").hidden = false;
+      resume();
+      autosave();
+    };
+    $("finishBtn").onclick = () => {
+      lost.active = false; lost.text = segsToText(lost.segs); saveSession(lost);
+      $("resumeCard").hidden = true; renderHist(); openDone(lost, false);
+    };
+  }
+  $("pauseBtn").onclick = () => { if (state === "rec") pause(); else if (state === "paused") resume(); };
+  $("stopBtn").onclick = stopAll;
+  window.addEventListener("beforeunload", (e) => { if (state !== "idle") { e.preventDefault(); e.returnValue = ""; } });
+
+  // ---------- result ----------
+  let openId = null;
+  function openDone(s, fresh) {
+    openId = s.id;
+    $("title").value = s.title || "";
+    $("text").value = s.text || segsToText(s.segs || []);
+    $("dlAudio").hidden = !(fresh && audioBlob);
+    $("doneCard").hidden = false;
+    if (!fresh) $("doneCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  const current = () => loadAll().find((x) => x.id === openId);
+  function persistEdit() { const s = current(); if (!s) return; s.title = $("title").value.trim() || s.title; s.text = $("text").value; saveSession(s); renderHist(); }
+  let editT = null;
+  $("title").oninput = $("text").oninput = () => { clearTimeout(editT); editT = setTimeout(persistEdit, 600); };
+  const metaLine = (s) => new Intl.DateTimeFormat(LOC(), { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(s.date)) + " · " + mmss(s.dur || 0);
+  async function copy(txt) {
+    let ok = false;
+    try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) {}
+    if (!ok) { try { const ta = document.createElement("textarea"); ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); ok = document.execCommand("copy"); ta.remove(); } catch (e) {} }
+    return ok;
+  }
+  $("copyNotulen").onclick = async () => {
+    persistEdit();
+    const s = current(); if (!s) return;
+    // header lines are read by the main app's Notulen menu
+    const txt = "JUDUL: " + s.title + "\nWAKTU: " + metaLine(s) + "\n---\n" + $("text").value.trim();
+    toast((await copy(txt)) ? tr("Tersalin. Tempel di menu Notulen aplikasi Meja Kerja.", "Copied. Paste it in the Notulen menu of the Meja Kerja app.") : tr("Gagal menyalin. Tekan lama pada transkrip lalu Copy.", "Could not copy. Long-press the transcript and Copy."));
+  };
+  $("copyText").onclick = async () => { toast((await copy($("text").value)) ? tr("Transkrip tersalin.", "Transcript copied.") : tr("Gagal menyalin.", "Could not copy.")); };
+  function download(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
+  const fileName = (s, ext) => (s.title || "rapat").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 60) + "." + ext;
+  $("dlText").onclick = () => { persistEdit(); const s = current(); if (!s) return; download(new Blob([s.title + "\n" + metaLine(s) + "\n\n" + $("text").value], { type: "text/plain;charset=utf-8" }), fileName(s, "txt")); };
+  $("dlAudio").onclick = () => { const s = current(); if (!s || !audioBlob) return; download(audioBlob, fileName(s, /webm/.test(audioType) ? "webm" : "m4a")); };
+  $("newRec").onclick = () => { $("doneCard").hidden = true; openId = null; $("timer").textContent = "00:00"; setStatus(tr("Tekan tombol merah untuk mulai", "Tap the red button to start")); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  let delArmed = false;
+  $("delRec").onclick = () => {
+    if (!delArmed) { delArmed = true; $("delRec").textContent = tr("Tekan lagi untuk menghapus", "Tap again to delete"); setTimeout(() => { delArmed = false; $("delRec").textContent = tr("Hapus rekaman ini", "Delete this recording"); }, 3000); return; }
+    delArmed = false;
+    try { localStorage.setItem("rk:sessions", JSON.stringify(loadAll().filter((x) => x.id !== openId))); } catch (e) {}
+    $("newRec").click(); renderHist(); toast(tr("Rekaman dihapus.", "Recording deleted."));
+  };
+
+  function renderHist() {
+    const all = loadAll();
+    $("hist").innerHTML = all.length ? all.map((s) => '<button class="hrow" data-id="' + esc(s.id) + '"><span><b>' + esc(s.title) + '</b><small>' + esc(metaLine(s)) + '</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg></button>').join("")
+      : '<div class="empty">' + tr("Belum ada rekaman.", "No recordings yet.") + '</div>';
+  }
+  $("hist").onclick = (e) => { const b = e.target.closest("[data-id]"); if (!b || state !== "idle") return; const s = loadAll().find((x) => x.id === b.dataset.id); if (s) openDone(s, false); };
+
+  // ---------- sheets ----------
+  function openSheet(html, mount) { $("sheet").innerHTML = html; $("scrim").hidden = false; if (mount) mount($("sheet")); }
+  function closeSheet() { $("scrim").hidden = true; $("sheet").innerHTML = ""; }
+  $("scrim").onclick = (e) => { if (e.target === $("scrim")) closeSheet(); };
+  function alertBox(msg) { openSheet('<h2>' + tr("Perhatian", "Notice") + '</h2><p>' + esc(msg) + '</p><div class="row end"><button class="btn primary" id="aOk">OK</button></div>', () => { $("aOk").onclick = closeSheet; }); }
+  function openVersions() {
+    openSheet('<h2>' + tr("Riwayat versi", "Version history") + '</h2>' + CHANGELOG.map((c, i) => '<div class="vitem"><b>v' + esc(c.v) + '</b> · ' + esc(new Intl.DateTimeFormat(LOC(), { day: "numeric", month: "short", year: "numeric" }).format(new Date(c.d))) + ' · ' + (i === CHANGELOG.length - 1 ? tr("Rilis pertama", "First release") : (c.v.split(".")[0] !== CHANGELOG[i + 1].v.split(".")[0] ? "Major" : c.v.split(".")[1] !== CHANGELOG[i + 1].v.split(".")[1] ? "Minor" : "Patch")) + '<ul>' + (lang === "en" ? c.en : c.items).map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul></div>').join("") +
+      '<div class="row end"><button class="btn primary" id="vClose">' + tr("Tutup", "Close") + '</button></div>', () => { $("vClose").onclick = closeSheet; });
+  }
+  $("verBtn").onclick = openVersions;
+  function openSettings() {
+    const seg = (name, opts, cur) => '<div class="seg2' + (opts.length === 2 ? " two" : "") + '">' + opts.map(([v, l]) => '<button type="button" data-' + name + '="' + v + '" aria-pressed="' + (v === cur) + '">' + l + '</button>').join("") + '</div>';
+    openSheet(
+      '<h2>' + tr("Pengaturan", "Settings") + '</h2>' +
+      '<div class="field"><label>' + tr("Tema", "Theme") + '</label>' + seg("th", [["system", tr("Ikuti HP", "Phone")], ["light", tr("Terang", "Light")], ["dark", tr("Gelap", "Dark")]], theme) + '</div>' +
+      '<div class="field"><label>' + tr("Bahasa aplikasi", "App language") + '</label>' + seg("lg", [["id", "Indonesia"], ["en", "English"]], lang) + '<p class="hint">' + tr("Bahasa rapat untuk transkrip dipilih di layar rekam.", "The meeting language for the transcript is chosen on the record screen.") + '</p></div>' +
+      '<div class="field"><label>Backup</label><div class="row start"><button class="btn" id="bExp">' + tr("Unduh backup", "Download backup") + '</button><button class="btn" id="bImp">' + tr("Pulihkan dari backup", "Restore from backup") + '</button></div></div>' +
+      '<div class="about"><b>' + "Meeting Recorder" + '</b><span>' + tr("Versi ", "Version ") + 'v' + APP_VERSION + '</span><span class="copy">© 2026 Faiq Aziz. ' + tr("Hak cipta dilindungi.", "All rights reserved.") + '</span></div>' +
+      '<div class="row end"><button class="btn primary" id="sClose">' + tr("Tutup", "Close") + '</button></div>',
+      (sh) => {
+        sh.querySelectorAll("[data-th]").forEach((b) => (b.onclick = () => { theme = b.dataset.th; setPref("theme", theme); applyTheme(); openSettings(); }));
+        sh.querySelectorAll("[data-lg]").forEach((b) => (b.onclick = () => { lang = b.dataset.lg; setPref("lang", lang); applyStatic(); renderHist(); if (state === "idle" && $("doneCard").hidden) setStatus(tr("Tekan tombol merah untuk mulai", "Tap the red button to start")); openSettings(); }));
+        $("bExp").onclick = () => { const all = loadAll(); if (!all.length) { toast(tr("Belum ada rekaman untuk di-backup.", "No recordings to back up yet.")); return; } download(new Blob([JSON.stringify({ app: "rekam-rapat", version: APP_VERSION, sessions: all })], { type: "application/json" }), "rekam-rapat-backup.json"); };
+        $("bImp").onclick = () => { $("importFile").value = ""; $("importFile").click(); };
+        $("sClose").onclick = closeSheet;
+      }
+    );
+  }
+  $("importFile").onchange = async (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    try {
+      const j = JSON.parse(await f.text()); if (!j || !Array.isArray(j.sessions)) throw 0;
+      const map = new Map(loadAll().map((s) => [s.id, s])); let n = 0;
+      for (const s of j.sessions) if (s && s.id && typeof s.text === "string") { map.set(s.id, s); n++; }
+      const all = [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+      localStorage.setItem("rk:sessions", JSON.stringify(all));
+      renderHist(); closeSheet(); toast(n + tr(" rekaman dipulihkan.", " recordings restored."));
+    } catch (x) { toast(tr("File backup tidak valid.", "Invalid backup file.")); }
+  };
+  $("setBtn").onclick = openSettings;
+
+  let toastT = null;
+  function toast(m) { const t = $("toast"); t.textContent = m; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 3000); }
+
+  applyStatic();
+  renderHist();
+})();
+</script>
+</body>
+</html>
