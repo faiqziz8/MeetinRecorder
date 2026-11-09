@@ -207,8 +207,10 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // ---------- version ----------
   // Bump APP_VERSION (x.y.z) and add an entry on top for every change.
   // x Major = big change, y Minor = new feature, z Patch = fix or small tweak.
-  const APP_VERSION = "1.3.1";
+  const APP_VERSION = "1.4.0";
   const CHANGELOG = [
+    { v: "1.4.0", d: "2026-11-09", items: ["Rekaman panjang tidak lagi dibuka sekaligus: untuk .m4a (Voice Memos), .wav dan .mp3 hanya menit yang dipilih yang dibaca, per 10 menit. Ini mencegah halaman tertutup sendiri di iPhone.", "Kalau aplikasi sempat tertutup sendiri, saat dibuka lagi muncul keterangan di tahap mana dan detail errornya."],
+      en: ["Long recordings are no longer opened all at once: for .m4a (Voice Memos), .wav and .mp3 only the chosen minutes are read, 10 minutes at a time. This stops iPhone from reloading the page.", "If the app closed itself, reopening it shows at which stage and the error details."] },
     { v: "1.3.1", d: "2026-11-09", items: ["Perbaikan: transkrip dari file gagal setelah unduhan model selesai di perangkat yang mendukung WebGPU (Chrome laptop, iOS terbaru).", "Kalau WebGPU bermasalah, otomatis pindah ke mode CPU (WASM).", "Saat gagal, muncul detail error yang bisa disalin dan dikirim untuk diperbaiki."],
       en: ["Fix: file transcription failed after the model download on devices with WebGPU (Chrome on laptop, latest iOS).", "If WebGPU has problems, it switches to CPU mode (WASM) automatically.", "On failure, error details appear and can be copied and sent for fixing."] },
     { v: "1.3.0", d: "2026-11-09", items: ["Pilih bagian rekaman yang mau ditranskrip: dari menit berapa sampai menit berapa.", "Tombol Lanjut untuk memproses potongan berikutnya; hasilnya digabung ke transkrip yang sama dengan waktu yang benar.", "File cukup dibaca sekali per sesi dan kebutuhan memorinya lebih kecil.", "Peringatan lebih jelas untuk rekaman sangat panjang di HP."],
@@ -547,7 +549,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
       } catch (err) { self.postMessage({ type: "error", message: String(err && (err.stack || err.message) || err).slice(0, 600) }); }
     };`;
   let lastNote = "", asrEngine = "";
-  let asrWorker = null, asrRun = null, asrFile = null, asrDur = 0, asrAudio = null, asrAudioFor = null, asrSession = null;
+  let asrWorker = null, asrRun = null, asrFile = null, asrDur = 0, asrSrc = null, asrSrcFor = null, asrSession = null;
   function makeWorker() {
     if (window.__fakeASR) return window.__fakeASR(); // test hook
     return new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })), { type: "module" });
@@ -558,7 +560,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   $("asrPick").onclick = () => { $("asrFile").value = ""; $("asrFile").click(); };
   $("asrFile").onchange = () => {
     const f = $("asrFile").files && $("asrFile").files[0]; if (!f) return;
-    asrFile = f; asrDur = 0; asrAudio = null; asrAudioFor = null; asrSession = null;
+    asrFile = f; asrDur = 0; asrSrc = null; asrSrcFor = null; asrSession = null;
     $("asrNext").hidden = true;
     $("asrName").textContent = f.name + " · " + (f.size / 1048576).toFixed(1) + " MB";
     $("asrGo").disabled = false;
@@ -618,6 +620,158 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // Whisper invents stock phrases on silence; drop those and exact repeats
   const HALLU = /^(terima kasih( telah menonton| sudah menonton)?|thanks for watching|subtitle(s)? by|sampai jumpa( lagi)?)[.!]?$/i;
 
+  // ---------- read only the needed minutes of a recording ----------
+  // Decoding a whole 2-hour file needs gigabytes and makes iPhone Safari reload the page.
+  // For .m4a/.mp4 (AAC), .wav and .mp3 we cut out just the requested stretch before decoding.
+  const readBytes = async (file, a, b) => new Uint8Array(await file.slice(a, b).arrayBuffer());
+  const u32 = (d, i) => ((d[i] << 24) | (d[i + 1] << 16) | (d[i + 2] << 8) | d[i + 3]) >>> 0;
+  const u16 = (d, i) => (d[i] << 8) | d[i + 1];
+  const typ = (d, i) => String.fromCharCode(d[i], d[i + 1], d[i + 2], d[i + 3]);
+  function* kids(d, start, end) {
+    let p = start;
+    while (p + 8 <= end) {
+      let size = u32(d, p), hdr = 8;
+      const t = typ(d, p + 4);
+      if (size === 1) { size = u32(d, p + 8) * 4294967296 + u32(d, p + 12); hdr = 16; }
+      else if (size === 0) size = end - p;
+      if (size < hdr) return;
+      yield { t, s: p + hdr, e: Math.min(end, p + size) };
+      p += size;
+    }
+  }
+  const child = (d, box, t) => { for (const k of kids(d, box.s, box.e)) if (k.t === t) return k; return null; };
+  async function mp4Index(file) {
+    // find the moov box without reading media data
+    let pos = 0, moov = null;
+    while (pos + 8 <= file.size) {
+      const h = await readBytes(file, pos, pos + 16);
+      let size = u32(h, 0); const t = typ(h, 4);
+      if (size === 1) size = u32(h, 8) * 4294967296 + u32(h, 12); else if (size === 0) size = file.size - pos;
+      if (size < 8) break;
+      if (t === "moov") { moov = await readBytes(file, pos, pos + size); break; }
+      pos += size;
+    }
+    if (!moov) return null;
+    const root = { s: 8, e: moov.length };
+    for (const trak of kids(moov, root.s, root.e)) {
+      if (trak.t !== "trak") continue;
+      const mdia = child(moov, trak, "mdia"); if (!mdia) continue;
+      const hdlr = child(moov, mdia, "hdlr"); if (!hdlr || typ(moov, hdlr.s + 8) !== "soun") continue;
+      const mdhd = child(moov, mdia, "mdhd");
+      const timescale = moov[mdhd.s] === 1 ? u32(moov, mdhd.s + 20) : u32(moov, mdhd.s + 12);
+      const minf = child(moov, mdia, "minf"), stbl = minf && child(moov, minf, "stbl");
+      if (!stbl) continue;
+      // AudioSpecificConfig from stsd > mp4a > esds (> descriptor 0x05)
+      const stsd = child(moov, stbl, "stsd");
+      const entry = { s: stsd.s + 8, e: stsd.e };
+      let mp4a = null; for (const k of kids(moov, entry.s, entry.e)) { mp4a = k; break; }
+      if (!mp4a || mp4a.t !== "mp4a") return null;
+      let asc = null;
+      for (let i = mp4a.s + 28; i < mp4a.e - 4; i++) {
+        if (typ(moov, i) === "esds") {
+          for (let j = i + 8; j < mp4a.e - 2; j++) if (moov[j] === 0x05) {
+            let k = j + 1, len = 0, c = 0; do { c = moov[k++]; len = (len << 7) | (c & 0x7f); } while (c & 0x80 && k < j + 5);
+            if (len >= 2 && len < 64) { asc = moov.subarray(k, k + len); break; }
+          }
+          break;
+        }
+      }
+      if (!asc) return null;
+      let aot = asc[0] >> 3;
+      const freqIdx = ((asc[0] & 7) << 1) | (asc[1] >> 7), chan = (asc[1] >> 3) & 15;
+      if (aot === 31 || freqIdx === 15) return null;
+      const stts = child(moov, stbl, "stts"), stsc = child(moov, stbl, "stsc"), stsz = child(moov, stbl, "stsz");
+      const stco32 = child(moov, stbl, "stco"), stco = stco32 || child(moov, stbl, "co64"), co64 = !stco32;
+      const n = u32(moov, stsz.s + 8), fixed = u32(moov, stsz.s + 4);
+      const sizes = new Uint32Array(n); for (let i = 0; i < n; i++) sizes[i] = fixed || u32(moov, stsz.s + 12 + i * 4);
+      const times = new Float64Array(n);
+      { let k = 0, t = 0; const c = u32(moov, stts.s + 4); for (let e = 0; e < c; e++) { const cnt = u32(moov, stts.s + 8 + e * 8), dl = u32(moov, stts.s + 12 + e * 8); for (let x = 0; x < cnt && k < n; x++) { times[k++] = t; t += dl; } } }
+      const nChunks = u32(moov, stco.s + 4);
+      const chunkOff = new Float64Array(nChunks);
+      for (let i = 0; i < nChunks; i++) chunkOff[i] = co64 ? u32(moov, stco.s + 8 + i * 8) * 4294967296 + u32(moov, stco.s + 12 + i * 8) : u32(moov, stco.s + 8 + i * 4);
+      const offsets = new Float64Array(n);
+      { const c = u32(moov, stsc.s + 4); let k = 0;
+        for (let e = 0; e < c; e++) {
+          const first = u32(moov, stsc.s + 8 + e * 12) - 1, per = u32(moov, stsc.s + 12 + e * 12);
+          const next = e + 1 < c ? u32(moov, stsc.s + 8 + (e + 1) * 12) - 1 : nChunks;
+          for (let ch = first; ch < next && k < n; ch++) { let o = chunkOff[ch]; for (let x = 0; x < per && k < n; x++) { offsets[k] = o; o += sizes[k]; k++; } }
+        } }
+      return { timescale, sizes, times, offsets, n, dur: n ? (times[n - 1] + (times[1] - times[0] || 1024)) / timescale : 0, profile: (aot === 5 || aot === 29) ? 1 : Math.max(0, aot - 1), freqIdx, chan };
+    }
+    return null;
+  }
+  // wrap raw AAC frames in ADTS headers so decodeAudioData can read a cut-out stretch
+  async function mp4Piece(file, ix, startS, endS) {
+    let a = 0, b = ix.n;
+    const ts = startS * ix.timescale, te = endS * ix.timescale;
+    while (a < ix.n && ix.times[a] < ts) a++;
+    b = a; while (b < ix.n && ix.times[b] < te) b++;
+    if (b <= a) return null;
+    const lo = ix.offsets[a], hi = ix.offsets[b - 1] + ix.sizes[b - 1];
+    let total = 0; for (let i = a; i < b; i++) total += ix.sizes[i];
+    const span = hi - lo <= total * 1.5 ? await readBytes(file, lo, hi) : null;
+    const out = new Uint8Array(total + 7 * (b - a));
+    let p = 0;
+    for (let i = a; i < b; i++) {
+      const sz = ix.sizes[i], len = sz + 7;
+      out[p] = 0xff; out[p + 1] = 0xf1;
+      out[p + 2] = ((ix.profile & 3) << 6) | ((ix.freqIdx & 15) << 2) | ((ix.chan >> 2) & 1);
+      out[p + 3] = ((ix.chan & 3) << 6) | ((len >> 11) & 3);
+      out[p + 4] = (len >> 3) & 0xff; out[p + 5] = ((len & 7) << 5) | 0x1f; out[p + 6] = 0xfc;
+      const frame = span ? span.subarray(ix.offsets[i] - lo, ix.offsets[i] - lo + sz) : await readBytes(file, ix.offsets[i], ix.offsets[i] + sz);
+      out.set(frame, p + 7); p += len;
+    }
+    return { blob: new Blob([out], { type: "audio/aac" }), t0: ix.times[a] / ix.timescale };
+  }
+  async function wavIndex(file) {
+    const h = await readBytes(file, 0, Math.min(file.size, 4096));
+    if (typ(h, 0) !== "RIFF" || typ(h, 8) !== "WAVE") return null;
+    let p = 12, fmt = null;
+    const le32 = (i) => (h[i] | (h[i + 1] << 8) | (h[i + 2] << 16) | (h[i + 3] << 24)) >>> 0, le16 = (i) => h[i] | (h[i + 1] << 8);
+    while (p + 8 <= h.length) {
+      const id = typ(h, p), size = le32(p + 4);
+      if (id === "fmt ") fmt = { header: h.slice(p, p + 8 + size), rate: le32(p + 12), byteRate: le32(p + 16), align: le16(p + 20) };
+      if (id === "data" && fmt) return { ...fmt, dataOff: p + 8, dataLen: Math.min(size, file.size - p - 8), dur: Math.min(size, file.size - p - 8) / fmt.byteRate };
+      p += 8 + size + (size & 1);
+    }
+    return null;
+  }
+  function wavPiece(file, ix, startS, endS) {
+    const a = ix.dataOff + Math.floor(startS * ix.rate) * ix.align, b = Math.min(ix.dataOff + ix.dataLen, ix.dataOff + Math.floor(endS * ix.rate) * ix.align);
+    if (b <= a) return null;
+    const len = b - a, head = new Uint8Array(12 + ix.header.length + 8), dv = new DataView(head.buffer);
+    head.set([82, 73, 70, 70]); dv.setUint32(4, head.length - 8 + len, true); head.set([87, 65, 86, 69], 8);
+    head.set(ix.header, 12); const q = 12 + ix.header.length; head.set([100, 97, 116, 97], q); dv.setUint32(q + 4, len, true);
+    return { blob: new Blob([head, file.slice(a, b)], { type: "audio/wav" }), t0: startS };
+  }
+  async function mp3Index(file, dur) {
+    const h = await readBytes(file, 0, 10);
+    const isId3 = typ(h, 0).startsWith("ID3");
+    const id3 = isId3 ? 10 + ((h[6] & 127) << 21 | (h[7] & 127) << 14 | (h[8] & 127) << 7 | (h[9] & 127)) : 0;
+    const looksMp3 = isId3 || (h[0] === 0xff && (h[1] & 0xe0) === 0xe0) || /\.mp3$/i.test(file.name);
+    return looksMp3 && dur ? { id3, dur } : null;
+  }
+  function mp3Piece(file, ix, startS, endS) {
+    // constant bitrate assumption: byte position follows time; mp3 decoders resync on frame headers
+    const body = file.size - ix.id3, a = ix.id3 + Math.floor(body * startS / ix.dur), b = Math.min(file.size, ix.id3 + Math.ceil(body * endS / ix.dur));
+    return b > a ? { blob: file.slice(a, b, "audio/mpeg"), t0: startS } : null;
+  }
+  async function decodeBlob16k(blob) { return decodeTo16k(blob); }
+  // returns { kind, dur, piece(startS, endS) -> { audio: Float32Array (16 kHz), t0 } }
+  async function openSource(file) {
+    try { const ix = await mp4Index(file); if (ix && ix.n) return { kind: "m4a", dur: ix.dur, piece: async (s, e) => { const p = await mp4Piece(file, ix, s, e); return p && { audio: await decodeBlob16k(p.blob), t0: p.t0 }; } }; } catch (e) {}
+    try { const ix = await wavIndex(file); if (ix) return { kind: "wav", dur: ix.dur, piece: async (s, e) => { const p = wavPiece(file, ix, s, e); return p && { audio: await decodeBlob16k(p.blob), t0: p.t0 }; } }; } catch (e) {}
+    try { const ix = await mp3Index(file, asrDur); if (ix) return { kind: "mp3", dur: ix.dur, piece: async (s, e) => { const p = mp3Piece(file, ix, s, e); return p && { audio: await decodeBlob16k(p.blob), t0: p.t0 }; } }; } catch (e) {}
+    // other formats (ogg/opus, webm, video): decode the whole file once
+    let full = null;
+    return { kind: "full", dur: asrDur, piece: async (s, e) => {
+      if (!full) full = await decodeTo16k(file);
+      return { audio: full.subarray(Math.floor(s * 16000), Math.floor(Math.min(full.length / 16000, e) * 16000)), t0: s };
+    } };
+  }
+  // remember what was running, so after an iOS memory crash the app can say where it died
+  const crumb = (o) => { try { if (o) localStorage.setItem("rk:asrCrumb", JSON.stringify(o)); else localStorage.removeItem("rk:asrCrumb"); } catch (e) {} };
+
   $("asrGo").onclick = () => runAsr(false);
   $("asrNext").onclick = () => runAsr(true);
   async function runAsr(cont) {
@@ -639,19 +793,15 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     asrSession = session;
     let phase = "decode";
     try {
-      if (asrAudioFor !== asrFile) {
-        asrMsg(tr("Membaca file audio… (file panjang bisa 1–3 menit)", "Reading the audio file… (long files can take 1–3 minutes)")); asrBar(0.02);
-        asrAudio = null;
-        asrAudio = await decodeTo16k(asrFile);
-        asrAudioFor = asrFile;
-      }
+      asrMsg(tr("Membuka file rekaman…", "Opening the recording…")); asrBar(0.02);
+      if (asrSrcFor !== asrFile) { asrSrc = await openSource(asrFile); asrSrcFor = asrFile; }
+      const src = asrSrc;
+      if (src.dur) asrDur = src.dur;
       if (run.stop) throw { stopped: true };
-      phase = "model";
-      const full = asrAudio;
-      asrDur = full.length / 16000;
-      const startS = fromMin * 60, endS = Math.min(asrDur, toMin * 60);
-      const audio = full.subarray(Math.floor(startS * 16000), Math.floor(endS * 16000));
+      const startS = fromMin * 60, endS = asrDur ? Math.min(asrDur, toMin * 60) : toMin * 60;
       session.dur = Math.max(session.dur || 0, Math.round(endS));
+      phase = "model";
+      crumb({ phase, file: asrFile.name, kind: src.kind, model: $("asrModel").value, from: fromMin, to: toMin });
       if (!asrWorker) asrWorker = makeWorker();
       const w = asrWorker;
       const ask = (msg) => new Promise((res, rej) => {
@@ -668,44 +818,59 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
       asrMsg(tr("Menyiapkan model pengenal suara…", "Preparing the speech model…"));
       const ready = await ask({ type: "load", model });
       asrEngine = ready.engine || "";
-      phase = "run";
       if (run.stop) throw { stopped: true };
       $("liveCard").hidden = false; paintLive();
-      const step = 30 * 16000, n = Math.ceil(audio.length / step);
-      for (let i = 0; i < n; i++) {
-        if (run.stop) throw { stopped: true };
-        const chunk = audio.slice(i * step, Math.min(audio.length, (i + 1) * step));
-        asrMsg(tr("Mentranskrip ", "Transcribing ") + mmss(startS + i * 30) + " / " + mmss(endS) + " (" + Math.round(i / n * 100) + "%)" + (asrEngine ? " · " + asrEngine : ""));
-        asrBar(i / n);
-        let rms = 0; for (let k = 0; k < chunk.length; k += 16) rms += chunk[k] * chunk[k];
-        if (Math.sqrt(rms / (chunk.length / 16)) < 0.004) continue; // silence
-        const m = await ask({ type: "chunk", i, audio: chunk, lang });
-        const txt = (m.text || "").replace(/\s+/g, " ").trim();
-        const last = session.segs[session.segs.length - 1];
-        if (txt && !HALLU.test(txt) && !(last && last.text === txt)) { session.segs.push({ t: startS + i * 30, text: txt }); paintLive(); }
-        session.text = segsToText(session.segs); saveSession(session);
+      // work in 10-minute pieces so memory stays small, whatever the file length
+      const PIECE = 600, step = 30 * 16000;
+      for (let ps = startS; ps < endS; ps += PIECE) {
+        const pe = Math.min(endS, ps + PIECE);
+        phase = "decode";
+        crumb({ phase, at: mmss(ps), file: asrFile.name, kind: src.kind, model: $("asrModel").value, from: fromMin, to: toMin });
+        asrMsg(tr("Membaca menit ", "Reading minutes ") + Math.floor(ps / 60) + "–" + Math.ceil(pe / 60) + "…");
+        let piece = await src.piece(ps, pe);
+        if (!piece || !piece.audio || !piece.audio.length) continue;
+        phase = "run";
+        crumb({ phase, at: mmss(ps), file: asrFile.name, kind: src.kind, model: $("asrModel").value, engine: asrEngine, from: fromMin, to: toMin });
+        const audio = piece.audio, t0 = piece.t0, n = Math.ceil(audio.length / step);
+        piece = null;
+        for (let i = 0; i < n; i++) {
+          if (run.stop) throw { stopped: true };
+          const chunk = audio.slice(i * step, Math.min(audio.length, (i + 1) * step));
+          const at = t0 + i * 30;
+          asrMsg(tr("Mentranskrip ", "Transcribing ") + mmss(at) + " / " + mmss(endS) + (asrEngine ? " · " + asrEngine : ""));
+          asrBar((at - startS) / Math.max(1, endS - startS));
+          let rms = 0, cnt = 0; for (let k = 0; k < chunk.length; k += 7) { rms += chunk[k] * chunk[k]; cnt++; } // odd stride avoids aliasing on pure tones
+          if (Math.sqrt(rms / Math.max(1, cnt)) < 0.004) continue; // silence
+          const m = await ask({ type: "chunk", i, audio: chunk, lang });
+          const txt = (m.text || "").replace(/\s+/g, " ").trim();
+          const last = session.segs[session.segs.length - 1];
+          if (txt && !HALLU.test(txt) && !(last && last.text === txt)) { session.segs.push({ t: at, text: txt }); paintLive(); }
+          session.text = segsToText(session.segs); saveSession(session);
+        }
       }
       asrBar(1);
       session.segs.sort((x, y) => x.t - y.t);
       session.text = segsToText(session.segs); saveSession(session);
       // offer the next stretch of the same file, appended to this transcript
       if (endS < asrDur - 5) {
-        const len = toMin - fromMin, nb = Math.min(Math.ceil(asrDur / 60), toMin + len);
+        const len = toMin - fromMin, nb = Math.min(Math.ceil(asrDur / 60 - 0.05), toMin + len);
         $("asrFrom").value = toMin; $("asrTo").value = nb; rangeInfo();
         $("asrNext").textContent = tr("Lanjut menit " + toMin + "–" + nb, "Continue minutes " + toMin + "–" + nb);
         $("asrNext").hidden = false;
       }
+      crumb(null);
       asrMsg(session.segs.length ? tr("Selesai. Periksa transkripnya, lalu Salin untuk Notulen.", "Done. Check the transcript, then Copy for Notulen.") : tr("Tidak ada suara yang terbaca di file ini.", "No speech was found in this file."));
       $("liveCard").hidden = true;
       openDone(session, false);
       renderHist();
     } catch (e) {
+      crumb(null);
       if (e && e.stopped) {
         asrMsg(tr("Dihentikan. Bagian yang sudah selesai tersimpan di riwayat.", "Stopped. The finished part is saved in history."));
         if (session.segs.length) { session.text = segsToText(session.segs); saveSession(session); renderHist(); openDone(session, false); }
       } else {
         const msg = String(e && e.message || "");
-        const mem = /memory|allocation|RangeError|out of/i.test(msg);
+        const mem = /memory|allocation|RangeError|out of|bad_alloc/i.test(msg);
         asrMsg(phase === "decode"
           ? (mem ? tr("Memori tidak cukup untuk membuka file sepanjang ini. Potong rekaman (mis. di Voice Memos) atau pakai laptop.", "Not enough memory to open a file this long. Trim the recording (e.g. in Voice Memos) or use a laptop.")
                  : tr("File ini tidak bisa dibuka. Coba format .m4a, .mp3, atau .wav.", "This file cannot be opened. Try .m4a, .mp3 or .wav."))
@@ -727,6 +892,20 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
       if (wake) { try { wake.release(); } catch (x) {} wake = null; }
     }
   }
+  try {
+    const c = JSON.parse(localStorage.getItem("rk:asrCrumb") || "null");
+    if (c) {
+      crumb(null);
+      setTimeout(() => {
+        asrMsg(c.phase === "model"
+          ? tr("Aplikasi tertutup sendiri saat memuat model pengenal suara. Kemungkinan memori HP tidak cukup: pilih mode Cepat, tutup aplikasi lain, atau pakai laptop.", "The app closed itself while loading the speech model, probably out of memory: choose Fast mode, close other apps, or use a laptop.")
+          : c.phase === "decode"
+          ? tr("Aplikasi tertutup sendiri saat membaca file (" + (c.kind || "?") + ", menit " + (c.at || "?") + "). Kemungkinan memori HP tidak cukup untuk format file ini.", "The app closed itself while reading the file (" + (c.kind || "?") + ", at " + (c.at || "?") + "), probably out of memory for this file format.")
+          : tr("Aplikasi tertutup sendiri saat mentranskrip (menit " + (c.at || "?") + "). Kemungkinan memori HP tidak cukup: pilih mode Cepat atau pakai laptop.", "The app closed itself while transcribing (at " + (c.at || "?") + "), probably out of memory: choose Fast mode or use a laptop."));
+        showErrDetail("crash during " + c.phase + " " + JSON.stringify(c));
+      }, 0);
+    }
+  } catch (e) {}
   function showErrDetail(msg) {
     const d = $("asrErr");
     const info = [ "v" + APP_VERSION, navigator.userAgent, "model: " + ($("asrModel").value), lastNote && "note: " + lastNote, "error: " + msg ].filter(Boolean).join("\n");
