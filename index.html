@@ -70,6 +70,8 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
 .seg time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 3px; }
 .interim { color: var(--muted); font-style: italic; }
 .seg.gap span { color: var(--warn); font-weight: 600; font-size: 14px; }
+.pbar2 { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.pbar2 i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .3s; }
 .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 14px 0; }
 .field { display: grid; gap: 6px; min-width: 0; }
 .field label { font-size: 13px; font-weight: 600; color: var(--muted); }
@@ -130,6 +132,23 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
     <p class="hint" data-en="Biarkan layar tetap menyala dan aplikasi tetap terbuka selama merekam. Butuh internet.">Biarkan layar tetap menyala dan aplikasi tetap terbuka selama merekam. Butuh internet.</p>
   </section>
 
+  <section class="card" id="asrCard">
+    <h2 data-en="Transkrip dari file rekaman">Transkrip dari file rekaman</h2>
+    <p class="hint" data-en="Upload a recording (Voice Memos, WhatsApp voice note, .m4a, .mp3, .wav, video). It is processed on this device, free, and the file is not sent anywhere.">Upload rekaman (Voice Memos, voice note WhatsApp, .m4a, .mp3, .wav, video). Diproses di perangkat ini, gratis, dan file tidak dikirim ke mana pun.</p>
+    <input type="file" id="asrFile" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.mp4" class="sr" tabindex="-1">
+    <div class="row start"><button class="btn" id="asrPick"><span data-en="Pilih file rekaman">Pilih file rekaman</span></button><span class="hint" id="asrName" style="align-self:center"></span></div>
+    <div class="opts" style="justify-content:flex-start">
+      <label for="asrModel"><span data-en="Mode">Mode</span>
+        <select id="asrModel"><option value="fast" data-en="Fast (lighter)">Cepat (lebih ringan)</option><option value="accurate" data-en="Accurate (heavier)">Akurat (lebih berat)</option></select></label>
+      <span data-en="Language follows Bahasa rapat above.">Bahasa mengikuti pilihan Bahasa rapat di atas.</span>
+    </div>
+    <div class="warnbox" id="asrWarn" hidden data-en="This recording is longer than 30 minutes. On a phone it may run out of memory or take very long; use a laptop or split the recording.">Rekaman ini lebih dari 30 menit. Di HP bisa kehabisan memori atau sangat lama; pakai laptop atau potong rekamannya.</div>
+    <div id="asrProg" hidden><div class="pbar2"><i id="asrBar"></i></div></div>
+    <p class="hint" id="asrStatus" aria-live="polite"></p>
+    <div class="row start"><button class="btn primary" id="asrGo" disabled><span data-en="Mulai transkrip">Mulai transkrip</span></button><button class="btn danger" id="asrStop" hidden><span data-en="Hentikan">Hentikan</span></button></div>
+    <p class="hint" data-en="First use downloads the speech model (about 80 MB fast, 250 MB accurate), so use WiFi. Keep the screen on while processing. Results are rough for noisy rooms and technical terms.">Pemakaian pertama mengunduh model pengenal suara (sekitar 80 MB untuk Cepat, 250 MB untuk Akurat), jadi pakai WiFi. Biarkan layar menyala selama proses. Hasil kurang bagus untuk ruangan bising dan istilah teknis.</p>
+  </section>
+
   <section class="card" id="liveCard" hidden>
     <h2 data-en="Transkrip langsung">Transkrip langsung</h2>
     <div class="live" id="live" aria-live="polite"></div>
@@ -176,8 +195,10 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
   // ---------- version ----------
   // Bump APP_VERSION (x.y.z) and add an entry on top for every change.
   // x Major = big change, y Minor = new feature, z Patch = fix or small tweak.
-  const APP_VERSION = "1.1.1";
+  const APP_VERSION = "1.2.0";
   const CHANGELOG = [
+    { v: "1.2.0", d: "2026-11-09", items: ["Transkrip dari file rekaman (percobaan): upload rekaman Voice Memos, voice note WhatsApp, .m4a, .mp3, .wav, atau video, lalu jadi transkrip otomatis.", "Diproses di perangkat sendiri: gratis dan file tidak dikirim ke mana pun. Pilih mode Cepat atau Akurat.", "Hasil masuk ke riwayat dan bisa langsung Salin untuk Notulen."],
+      en: ["Transcript from a recording file (experimental): upload a Voice Memos recording, WhatsApp voice note, .m4a, .mp3, .wav or video to get a transcript automatically.", "Processed on your own device: free, and the file is not sent anywhere. Choose Fast or Accurate mode.", "Results go to history and can be copied straight for Notulen."] },
     { v: "1.1.1", d: "2026-11-09", items: ["Nama aplikasi berganti dari Rekam Rapat menjadi Meeting Recorder."], en: ["The app is renamed from Rekam Rapat to Meeting Recorder."] },
     { v: "1.1.0", d: "2026-11-08",
       items: ["Kalau HP terkunci atau aplikasi ditinggal saat merekam, rekaman lanjut otomatis begitu aplikasi dibuka lagi.", "Bagian yang terputus ditandai di transkrip, mis. [terputus 12:30–14:05].", "Kalau iPhone sampai menutup aplikasi, transkrip yang sudah terekam tetap aman dan rekaman bisa dilanjutkan atau disimpan sebagai selesai."],
@@ -461,6 +482,159 @@ header { display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; }
 
   let toastT = null;
   function toast(m) { const t = $("toast"); t.textContent = m; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 3000); }
+
+  // ---------- transcribe an uploaded recording, on this device (Whisper via Transformers.js) ----------
+  const TJS = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+  const MODELS = { fast: "Xenova/whisper-base", accurate: "Xenova/whisper-small" };
+  const isPhone = /iPhone|iPad|Android/i.test(navigator.userAgent);
+  $("asrModel").value = getPref("asrModel", isPhone ? "fast" : "accurate");
+  $("asrModel").onchange = () => setPref("asrModel", $("asrModel").value);
+  // The model runs in a worker so the page stays responsive. Built from a string so the app stays one file.
+  const WORKER_SRC = `
+    let pipe = null, loaded = "";
+    self.onmessage = async (e) => {
+      const m = e.data;
+      try {
+        if (m.type === "load") {
+          if (loaded !== m.model) {
+            const { pipeline, env } = await import("${TJS}");
+            env.allowLocalModels = false;
+            const gpu = !!(self.navigator && navigator.gpu && await navigator.gpu.requestAdapter().catch(() => null));
+            pipe = await pipeline("automatic-speech-recognition", m.model, {
+              device: gpu ? "webgpu" : "wasm",
+              dtype: gpu ? { encoder_model: "fp32", decoder_model_merged: "q4" } : "q8",
+              progress_callback: (p) => { if (p.status === "progress" && p.total) self.postMessage({ type: "dl", file: p.file, loaded: p.loaded, total: p.total }); },
+            });
+            loaded = m.model;
+          }
+          self.postMessage({ type: "ready" });
+        } else if (m.type === "chunk") {
+          const out = await pipe(m.audio, { language: m.lang, task: "transcribe" });
+          self.postMessage({ type: "text", i: m.i, text: (out && out.text || "").trim() });
+        }
+      } catch (err) { self.postMessage({ type: "error", message: String(err && err.message || err) }); }
+    };`;
+  let asrWorker = null, asrRun = null, asrFile = null;
+  function makeWorker() {
+    if (window.__fakeASR) return window.__fakeASR(); // test hook
+    return new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })), { type: "module" });
+  }
+  const asrMsg = (t) => { $("asrStatus").textContent = t; };
+  const asrBar = (f) => { $("asrBar").style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + "%"; };
+
+  $("asrPick").onclick = () => { $("asrFile").value = ""; $("asrFile").click(); };
+  $("asrFile").onchange = () => {
+    const f = $("asrFile").files && $("asrFile").files[0]; if (!f) return;
+    asrFile = f;
+    $("asrName").textContent = f.name + " · " + (f.size / 1048576).toFixed(1) + " MB";
+    $("asrGo").disabled = false;
+    // read the length cheaply before decoding everything
+    const a = document.createElement("audio"); a.preload = "metadata";
+    a.onloadedmetadata = () => {
+      if (isFinite(a.duration)) {
+        $("asrName").textContent = f.name + " · " + mmss(a.duration);
+        $("asrWarn").hidden = !(isPhone && a.duration > 30 * 60);
+      }
+      URL.revokeObjectURL(a.src);
+    };
+    a.src = URL.createObjectURL(f);
+  };
+
+  // decode any audio/video file to 16 kHz mono, which is what Whisper expects
+  async function decodeTo16k(file) {
+    const buf = await file.arrayBuffer();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const decoded = await new Promise((res, rej) => ctx.decodeAudioData(buf, res, rej));
+    try { ctx.close(); } catch (e) {}
+    const len = Math.ceil(decoded.duration * 16000);
+    const off = new OfflineAudioContext(1, len, 16000);
+    const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+    const r = await off.startRendering();
+    return r.getChannelData(0);
+  }
+  // Whisper invents stock phrases on silence; drop those and exact repeats
+  const HALLU = /^(terima kasih( telah menonton| sudah menonton)?|thanks for watching|subtitle(s)? by|sampai jumpa( lagi)?)[.!]?$/i;
+
+  $("asrGo").onclick = async () => {
+    if (!asrFile || asrRun) return;
+    if (state !== "idle") { toast(tr("Selesaikan rekaman yang sedang berjalan dulu.", "Finish the running recording first.")); return; }
+    const run = { stop: false };
+    asrRun = run;
+    $("asrGo").hidden = true; $("asrStop").hidden = false; $("asrPick").disabled = true; $("asrProg").hidden = false;
+    $("doneCard").hidden = true;
+    keepAwake();
+    const lang = $("langSel").value.startsWith("en") ? "english" : "indonesian";
+    const model = MODELS[$("asrModel").value] || MODELS.fast;
+    const now = new Date();
+    session = { id: "s" + now.getTime(), date: now.toISOString(), title: asrFile.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").slice(0, 80), segs: [], text: "", dur: 0, lang: $("langSel").value, fromFile: true };
+    try {
+      asrMsg(tr("Membaca file audio…", "Reading the audio file…")); asrBar(0.02);
+      const audio = await decodeTo16k(asrFile);
+      if (run.stop) throw { stopped: true };
+      session.dur = Math.round(audio.length / 16000);
+      if (!asrWorker) asrWorker = makeWorker();
+      const w = asrWorker;
+      const ask = (msg) => new Promise((res, rej) => {
+        w.onmessage = (e) => {
+          const m = e.data;
+          if (m.type === "dl") { asrMsg(tr("Mengunduh model pengenal suara (sekali saja)… ", "Downloading the speech model (one time only)… ") + Math.round(m.loaded / 1048576) + "/" + Math.round(m.total / 1048576) + " MB"); asrBar(m.loaded / m.total); return; }
+          if (m.type === "error") { rej(new Error(m.message)); return; }
+          res(m);
+        };
+        w.onerror = (e) => rej(new Error(e.message || "worker"));
+        w.postMessage(msg);
+      });
+      asrMsg(tr("Menyiapkan model pengenal suara…", "Preparing the speech model…"));
+      await ask({ type: "load", model });
+      if (run.stop) throw { stopped: true };
+      $("liveCard").hidden = false; paintLive();
+      const step = 30 * 16000, n = Math.ceil(audio.length / step);
+      for (let i = 0; i < n; i++) {
+        if (run.stop) throw { stopped: true };
+        const chunk = audio.slice(i * step, Math.min(audio.length, (i + 1) * step));
+        asrMsg(tr("Mentranskrip ", "Transcribing ") + mmss(i * 30) + " / " + mmss(session.dur) + " (" + Math.round(i / n * 100) + "%)");
+        asrBar(i / n);
+        let rms = 0; for (let k = 0; k < chunk.length; k += 16) rms += chunk[k] * chunk[k];
+        if (Math.sqrt(rms / (chunk.length / 16)) < 0.004) continue; // silence
+        const m = await ask({ type: "chunk", i, audio: chunk, lang });
+        const txt = (m.text || "").replace(/\s+/g, " ").trim();
+        const last = session.segs[session.segs.length - 1];
+        if (txt && !HALLU.test(txt) && !(last && last.text === txt)) { session.segs.push({ t: i * 30, text: txt }); paintLive(); }
+        session.text = segsToText(session.segs); saveSession(session);
+      }
+      asrBar(1);
+      session.text = segsToText(session.segs); saveSession(session);
+      asrMsg(session.segs.length ? tr("Selesai. Periksa transkripnya, lalu Salin untuk Notulen.", "Done. Check the transcript, then Copy for Notulen.") : tr("Tidak ada suara yang terbaca di file ini.", "No speech was found in this file."));
+      $("liveCard").hidden = true;
+      openDone(session, false);
+      renderHist();
+    } catch (e) {
+      if (e && e.stopped) {
+        asrMsg(tr("Dihentikan. Bagian yang sudah selesai tersimpan di riwayat.", "Stopped. The finished part is saved in history."));
+        if (session.segs.length) { session.text = segsToText(session.segs); saveSession(session); renderHist(); openDone(session, false); }
+      } else {
+        const msg = String(e && e.message || "");
+        asrMsg(/decode|EncodingError|Unable/i.test(msg) ? tr("File ini tidak bisa dibaca. Coba format .m4a, .mp3, atau .wav.", "This file cannot be read. Try .m4a, .mp3 or .wav.")
+          : /fetch|network|Failed to load|import/i.test(msg) ? tr("Model gagal diunduh. Periksa koneksi internet lalu coba lagi.", "The model could not be downloaded. Check the internet connection and try again.")
+          : /memory|allocation|RangeError/i.test(msg) ? tr("Memori HP tidak cukup untuk file sepanjang ini. Potong rekaman jadi bagian lebih pendek, atau pakai laptop.", "Not enough memory for a file this long. Split the recording into shorter parts, or use a laptop.")
+          : tr("Transkrip gagal: ", "Transcription failed: ") + msg.slice(0, 120));
+        if (asrWorker) { try { asrWorker.terminate(); } catch (x) {} asrWorker = null; }
+      }
+      $("liveCard").hidden = true;
+    } finally {
+      asrRun = null; session = session && session.segs ? session : null;
+      $("asrGo").hidden = false; $("asrStop").hidden = true; $("asrPick").disabled = false;
+      if (wake) { try { wake.release(); } catch (x) {} wake = null; }
+    }
+  };
+  $("asrStop").onclick = () => {
+    if (!asrRun) return;
+    asrRun.stop = true;
+    // the worker may be busy on a chunk; end it so Stop is immediate
+    if (asrWorker) { try { asrWorker.terminate(); } catch (x) {} asrWorker = null; }
+    if (asrWorker === null && asrRun) { const r = asrRun; setTimeout(() => { if (asrRun === r) { /* pending promise will never resolve; unlock the UI */ asrRun = null; $("asrGo").hidden = false; $("asrStop").hidden = true; $("asrPick").disabled = false; asrMsg(tr("Dihentikan. Bagian yang sudah selesai tersimpan di riwayat.", "Stopped. The finished part is saved in history.")); if (session && session.segs.length) { renderHist(); openDone(session, false); } $("liveCard").hidden = true; } }, 300); }
+  };
 
   applyStatic();
   renderHist();
